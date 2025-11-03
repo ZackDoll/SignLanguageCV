@@ -4,10 +4,17 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="681cd3de-400e-4816-a6c4-86b0a3779678" name="Changes" comment="main file added">
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+    <list default="true" id="681cd3de-400e-4816-a6c4-86b0a3779678" name="Changes" comment="separated model and main function, live translation added">
+      <change afterPath="$PROJECT_DIR$/.idea/dictionaries/project.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/MSASL_data_loader.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data_train.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data_validator.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/model_gen.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.venv/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/.venv/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.venv/main.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.venv/model_gen.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -52,15 +59,26 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python.MSASL_data_loader.executor": "Run",
+    "Python.data_train.executor": "Run",
+    "Python.data_validator.executor": "Run",
     "Python.main.executor": "Run",
     "Python.model_gen.executor": "Run",
+    "Python.self_data_train.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "git-widget-placeholder": "main",
+    "last_opened_file_path": "C:/Users/zackj/PycharmProjects/SignLanguageTranslator/MP_Data",
     "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\zackj\PycharmProjects\SignLanguageTranslator\MP_Data" />
+    </key>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -100,13 +118,22 @@
       <option name="project" value="LOCAL" />
       <updated>1761970777258</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="separated model and main function, live translation added">
+      <option name="closed" value="true" />
+      <created>1762041266024</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1762041266024</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Added camera, location detection" />
     <MESSAGE value="Added camera, location detection, file formatting for data analysis" />
     <MESSAGE value="main file added" />
-    <option name="LAST_COMMIT_MESSAGE" value="main file added" />
+    <MESSAGE value="separated model and main function, live translation added" />
+    <option name="LAST_COMMIT_MESSAGE" value="separated model and main function, live translation added" />
   </component>
 </project>
