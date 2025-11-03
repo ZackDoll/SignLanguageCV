@@ -1,11 +1,13 @@
 import json
 import os
+import time
 import cv2
 import numpy as np
 import mediapipe as mp
 from tqdm import tqdm
-import urllib.request
-from pathlib import Path
+import hashlib
+import yt_dlp
+from yt_dlp.utils import DownloadError
 
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
@@ -21,6 +23,50 @@ class MSASLDataLoader:
         self.mp_holistic = mp_holistic
         self.synonym_map = None
 
+        # video cache
+        self.video_cache = {}
+        self.cache_file = os.path.join(dataset_dir, 'video_cache.json')
+        self.load_video_cache()
+
+        # failed videos tracking
+        self.failed_videos = set()
+        self.failed_file = os.path.join(dataset_dir, 'failed_videos.json')
+        self.load_failed_videos()
+
+        # track rate limited videos
+        self.rate_limited_videos = set()
+        self.rate_limit_count = 0
+        self.rate_limit_sleep_time = 60  # Start with 60 seconds
+
+    # ... existing methods ...
+    def load_video_cache(self):
+        """Load existing video download cache"""
+        if os.path.exists(self.cache_file):
+            with open(self.cache_file, 'r') as f:
+                self.video_cache = json.load(f)
+            print(f"Loaded video cache with {len(self.video_cache)} entries")
+
+    def save_video_cache(self):
+        """Save video download cache"""
+        with open(self.cache_file, 'w') as f:
+            json.dump(self.video_cache, f, indent=2)
+
+    def load_failed_videos(self):
+        """Load list of videos that failed to download"""
+        if os.path.exists(self.failed_file):
+            with open(self.failed_file, 'r') as f:
+                self.failed_videos = set(json.load(f))
+            print(f"Loaded {len(self.failed_videos)} known failed videos")
+
+    def save_failed_videos(self):
+        """Save list of failed videos"""
+        with open(self.failed_file, 'w') as f:
+            json.dump(list(self.failed_videos), f, indent=2)
+
+    def get_video_hash(self, url):
+        """Generate unique hash for video URL"""
+        return hashlib.md5(url.encode()).hexdigest()
+
     def load_synonyms(self):
         """synonym mappings (2d array)
         Format: [["ticket", "give ticket"], ["get", "receive"], ...]
@@ -30,10 +76,10 @@ class MSASLDataLoader:
             with open(synonym_path, 'r') as f:
                 synonyms = json.load(f)
 
-            # Create a mapping from any synonym to the first (canonical) term
+            # maps the synonym to the first term of synonym list
             synonym_map = {}
             for syn_group in synonyms:
-                canonical = syn_group[0]  # First term is canonical
+                canonical = syn_group[0]  # "canon" term is easiest term to use
                 for term in syn_group:
                     synonym_map[term] = canonical
 
@@ -60,31 +106,64 @@ class MSASLDataLoader:
 
         return train_data, test_data, val_data, classes
 
-    def download_video(self, url, output_path):
-        """Downloads YT video"""
-        try:
-            # For YouTube videos, we need yt-dlp
+    def download_video(self, url, output_path, cookiefile='www.youtube.com_cookies.txt',
+                       use_browser_cookies=False, max_retries=3, initial_backoff=5,
+                       max_backoff=300):
+        """
+        Download with retries/backoff and optional cookie auth.
+        Returns: (success: bool, is_rate_limited: bool, is_permanent_fail: bool)
+        """
+        attempt = 0
+        backoff = initial_backoff
+
+        # prepare opts
+        ydl_opts = {
+            'format': 'best[ext=mp4]',
+            'outtmpl': output_path,
+            'quiet': True,
+            'no_warnings': True,
+            'noprogress': True,
+            'retries': 1,
+        }
+
+        if use_browser_cookies:
+            ydl_opts['cookiesfrombrowser'] = ('opera',)
+        elif cookiefile and os.path.exists(cookiefile):
+            ydl_opts['cookiefile'] = cookiefile
+
+        while attempt < max_retries:
             try:
-                import yt_dlp
-
-                ydl_opts = {
-                    'format': 'best[ext=mp4]',
-                    'outtmpl': output_path,
-                    'quiet': True,
-                    'no_warnings': True,
-                }
-
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
-                return True
+                return (True, False, False)  # success
 
-            except ImportError:
-                print("ERROR: Please install yt-dlp: pip install yt-dlp")
-                return False
+            except DownloadError as e:
+                msg = str(e).lower()
+                attempt += 1
 
-        except Exception as e:
-            print(f"Error downloading {url}: {e}")
-            return False
+                # private or deleted errors
+                if any(keyword in msg for keyword in ['private', 'unavailable', 'removed', 'deleted']):
+                    # rate-limit check
+                    if 'rate-limit' in msg or "isn't available" in msg or 'try again later' in msg:
+                        return (False, True, False)  # rate-limited (temporary)
+                    else:
+                        return (False, False, True)  # permanent failure
+
+                # youtube rate limits you
+                if 'rate-limit' in msg or 'too many requests' in msg or 'exceeded' in msg:
+                    return (False, True, False)  # rate-limited (temporary) (not successful, video exists, rate limited)
+
+                # network error
+                time.sleep(min(5 * attempt, 60))
+                continue
+
+            except Exception as e:
+                attempt += 1
+                time.sleep(min(5 * attempt, 60))
+                continue
+
+        # max retries, assume a temp failure
+        return (False, True, False)
 
     def extract_clip(self, video_path, start_time, end_time, output_path):
         """Extract clip from video between start_time and end_time"""
@@ -156,7 +235,7 @@ class MSASLDataLoader:
         cap = cv2.VideoCapture(video_path)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # Sample frames evenly
+        # sample frames
         frame_indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
 
         keypoints_sequence = []
@@ -172,14 +251,14 @@ class MSASLDataLoader:
                     keypoints_sequence.append(np.zeros(1662))
                     continue
 
-                #crop to bounding box
+                # crop to bounding box
                 if use_box and box:
                     frame = self.crop_video_to_box(frame, box, width, height)
 
-                # Resize to standard size
+                # resize
                 frame = cv2.resize(frame, (640, 480))
 
-                # Extract keypoints
+                # extract numpy keypoints
                 _, results = self.mediapipe_detection(frame, holistic)
                 keypoints = self.extract_keypoints(results)
                 keypoints_sequence.append(keypoints)
@@ -193,21 +272,8 @@ class MSASLDataLoader:
         return np.array(keypoints_sequence[:num_frames])
 
     def process_dataset_sample(self, sample, sample_idx, split='train',
-                               num_frames=30, use_box=True):
-        """Process a single sample from the dataset
-        Sample format: {
-            'url': str,
-            'start_time': float,
-            'end_time': float,
-            'label': int,
-            'text': str,
-            'box': [y0, x0, y1, x1],
-            'width': float,
-            'height': float,
-            'fps': float,
-            ...
-        }
-        """
+                               num_frames=30, use_box=True, delete_clip_after=False):
+        """Process a single sample - with proper rate-limit handling"""
         url = sample['url']
         start_time = sample['start_time']
         end_time = sample['end_time']
@@ -217,55 +283,102 @@ class MSASLDataLoader:
         width = sample.get('width', 640)
         height = sample.get('height', 480)
 
-        # creates directory
+        # creates directory for this label
         label_dir = os.path.join(self.processed_dir, split, str(label))
         os.makedirs(label_dir, exist_ok=True)
 
-        # dont process duplicates
+        # check if already processed
         keypoint_path = os.path.join(label_dir, f"{sample_idx}.npy")
         if os.path.exists(keypoint_path):
             return True
 
-        # ensures http protocol
+        #make sure its http protocoled
         if not url.startswith('http'):
             url = 'https://' + url
 
-        # downloader
-        video_dir = os.path.join(self.dataset_dir, 'videos', split)
-        os.makedirs(video_dir, exist_ok=True)
-        video_path = os.path.join(video_dir, f"{sample_idx}.mp4")
+        # Check if permanently failed (don't retry)
+        if url in self.failed_videos:
+            return False
 
-        if not os.path.exists(video_path):
-            if not self.download_video(url, video_path):
+        # check if rate limited (retry)
+        if url in self.rate_limited_videos:
+            return False
+
+        # full video download
+        video_hash = self.get_video_hash(url)
+        full_video_dir = os.path.join(self.dataset_dir, 'videos', 'full')
+        os.makedirs(full_video_dir, exist_ok=True)
+        full_video_path = os.path.join(full_video_dir, f"{video_hash}.mp4")
+
+        # checks the cache
+        if url in self.video_cache and os.path.exists(full_video_path):
+            full_video_path = self.video_cache[url]
+        else:
+            # download attempt
+            success, is_rate_limited, is_permanent = self.download_video(url, full_video_path)
+
+            if success:
+                # add video to video cache
+                self.video_cache[url] = full_video_path
+                self.save_video_cache()
+
+            elif is_rate_limited:
+                # mark rate limited videos for retry
+                self.rate_limited_videos.add(url)
+                self.rate_limit_count += 1
+
+                # sleeps for longer if we get multiple rate limited errors in a row
+                if self.rate_limit_count >= 3:
+                    print(f"\n⚠ Rate-limited! Pausing for {self.rate_limit_sleep_time}s...")
+                    time.sleep(self.rate_limit_sleep_time)
+                    # increases sleep time until un rate limited
+                    self.rate_limit_sleep_time = min(self.rate_limit_sleep_time * 1.5, 600)
+                    # clears the rate limited set and retries them
+                    self.rate_limited_videos.clear()
+                    self.rate_limit_count = 0
+
                 return False
 
-        # process to np keypoints and save them
+            elif is_permanent:
+                # Permanent failure - mark as failed (video is private or deleted)
+                video_id = url.split('=')[-1] if '=' in url else url[-11:]
+                self.failed_videos.add(url)
+                self.save_failed_videos()
+                return False
+
+            else:
+                # whatever else is failing i guess
+                return False
+
+        # seperate clip and move it to clip_path
+        clip_dir = os.path.join(self.dataset_dir, 'videos', 'clips', split)
+        os.makedirs(clip_dir, exist_ok=True)
+        clip_path = os.path.join(clip_dir, f"{sample_idx}.mp4")
+
+        if not os.path.exists(clip_path):
+            if not self.extract_clip(full_video_path, start_time, end_time, clip_path):
+                return False
+
+        # Process to keypoints
         try:
             keypoints = self.process_video_to_keypoints(
-                video_path, box, width, height, num_frames, use_box
+                clip_path, box, width, height, num_frames, use_box
             )
-
             np.save(keypoint_path, keypoints)
 
-            # delete video to save space if needed
-            # os.remove(video_path)
+            if delete_clip_after and os.path.exists(clip_path):
+                os.remove(clip_path)
 
             return True
+
         except Exception as e:
-            print(f"Error processing sample {sample_idx}: {e}")
             return False
 
     def process_full_dataset(self, num_frames=30, use_box=True,
-                             limit_per_split=None, skip_existing=True):
-        """Process entire MS-ASL dataset
-
-        Args:
-            num_frames: Number of frames to extract per video
-            use_box: Whether to crop to bounding box
-            limit_per_split: Limit number of samples per split (for testing)
-            skip_existing: Skip already processed samples
-        """
-        # CREATE DIRECTORIES FIRST
+                             limit_per_split=None, skip_existing=True,
+                             delete_clips_after=False):
+        """Process entire MS-ASL dataset with rate-limit handling"""
+        # CREATE DIRECTORIES
         os.makedirs(self.processed_dir, exist_ok=True)
         os.makedirs(os.path.join(self.processed_dir, 'train'), exist_ok=True)
         os.makedirs(os.path.join(self.processed_dir, 'test'), exist_ok=True)
@@ -280,11 +393,22 @@ class MSASLDataLoader:
         print(f"Val samples: {len(val_data)}")
         print(f"Synonyms loaded: {len(self.synonym_map)} mappings")
 
-        # process the splits
+        # checks dupes
+        print("\nAnalyzing video duplicates...")
+        all_samples = train_data + test_data + val_data
+        unique_urls = set(sample['url'] for sample in all_samples)
+        duplicate_ratio = (len(all_samples) - len(unique_urls)) / len(all_samples) * 100
+        print(f"Total samples: {len(all_samples)}")
+        print(f"Unique videos: {len(unique_urls)}")
+        print(f"Savings from deduplication: {duplicate_ratio:.1f}% fewer downloads")
+
+        # retry logic for rate limited videos
         for split_name, split_data in [('train', train_data),
                                        ('test', test_data),
                                        ('val', val_data)]:
-            print(f"\nProcessing {split_name} split...")
+            print(f"\n{'=' * 60}")
+            print(f"Processing {split_name} split")
+            print(f"{'=' * 60}")
 
             if limit_per_split:
                 split_data = split_data[:limit_per_split]
@@ -292,9 +416,9 @@ class MSASLDataLoader:
             successful = 0
             failed = 0
             skipped = 0
+            rate_limited = 0
 
             for idx, sample in enumerate(tqdm(split_data, desc=f"{split_name}")):
-                # dont repeat data
                 label = sample['label']
                 label_dir = os.path.join(self.processed_dir, split_name, str(label))
                 keypoint_path = os.path.join(label_dir, f"{idx}.npy")
@@ -303,15 +427,36 @@ class MSASLDataLoader:
                     skipped += 1
                     continue
 
+                # all rate limited videos go here
+                url = sample.get('url', '')
+                if not url.startswith('http'):
+                    url = 'https://' + url
+
+                was_rate_limited = url in self.rate_limited_videos
+
                 if self.process_dataset_sample(sample, idx, split_name,
-                                               num_frames, use_box):
+                                               num_frames, use_box, delete_clips_after):
                     successful += 1
                 else:
-                    failed += 1
+                    if url in self.rate_limited_videos and not was_rate_limited:
+                        rate_limited += 1
+                    else:
+                        failed += 1
 
-            print(f"Successfully processed: {successful}/{len(split_data)}")
-            print(f"Failed: {failed}")
-            print(f"Skipped (already exists): {skipped}")
+            print(f"\n{split_name} Results:")
+            print(f"  ✓ Successfully processed: {successful}/{len(split_data)}")
+            print(f"  ✗ Permanently failed: {failed}")
+            print(f"  ⏸ Rate-limited (will retry): {rate_limited}")
+            print(f"  ⊘ Skipped (already exists): {skipped}")
+            if (len(split_data) - skipped) > 0:
+                success_rate = successful / (len(split_data) - skipped) * 100
+                print(f"  Success rate: {success_rate:.1f}%")
+
+        print(f"\n{'=' * 60}")
+        print(f"Processing Complete!")
+        print(f"{'=' * 60}")
+        print(f"Permanently failed videos: {len(self.failed_videos)}")
+        print(f"Rate-limited videos (retry later): {len(self.rate_limited_videos)}")
 
 if __name__ == "__main__":
     loader = MSASLDataLoader(
@@ -319,10 +464,10 @@ if __name__ == "__main__":
         processed_dir='MP_Data_MSASL'
     )
 
-    #process the set
+    # process the set
     loader.process_full_dataset(
         num_frames=30,
         use_box=True,
-        limit_per_split=1000, # Remove this to process full dataset (defaults to NoneType)
-
+        delete_clips_after=False,  # Set True to save disk space
+        # limit_per_split=1000, # Remove this to process full dataset (defaults to NoneType)
     )
