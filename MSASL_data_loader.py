@@ -38,6 +38,12 @@ class MSASLDataLoader:
         self.rate_limit_count = 0
         self.rate_limit_sleep_time = 60  # Start with 60 seconds
 
+        self.cookie_file = "www.youtube.com_cookies.txt"
+        if os.path.exists(self.cookie_file):
+            print(f"Found cookie file: {self.cookie_file}")
+        else:
+            print("Cookies not found")
+
     def load_video_cache(self):
         """Load existing video download cache"""
         if os.path.exists(self.cache_file):
@@ -104,9 +110,74 @@ class MSASLDataLoader:
             classes = json.load(f)  # Array like ["ticket", "nice", "teacher", ...]
 
         return train_data, test_data, val_data, classes
+    def retry_failures(self, sample_data, split='train', num_frames = 30, use_box=True):
+        """
+                Retry videos that were marked as failed.
+                Useful after fixing cookies or after YouTube unblocks you.
 
-    def download_video(self, url, output_path, cookiefile='www.youtube.com_cookies.txt',
-                       use_browser_cookies=False, max_retries=3, initial_backoff=5,
+                Args:
+                    sample_data: List of sample dicts from JSON
+                    split: Which split to process
+                    num_frames: Frames to extract
+                    use_box: Whether to use bounding box
+
+                Returns:
+                    dict with success/fail counts
+                """
+        print(f"\n{'=' * 60}")
+        print(f"Retrying {len(self.failed_videos)} failed videos")
+        print(f"{'=' * 60}")
+
+        # Create mapping of URL to samples
+        url_to_samples = {}
+        for idx, sample in enumerate(sample_data):
+            url = sample.get('url', '')
+            if not url.startswith('http'):
+                url = 'https://' + url
+
+            if url in self.failed_videos:
+                if url not in url_to_samples:
+                    url_to_samples[url] = []
+                url_to_samples[url].append((idx, sample))
+
+        print(f"Found {len(url_to_samples)} unique failed URLs to retry")
+
+        # Temporarily clear failed videos to allow retry
+        original_failed = self.failed_videos.copy()
+        self.failed_videos.clear()
+
+        successful_urls = set()
+        still_failed_urls = set()
+
+        for url, samples in tqdm(url_to_samples.items(), desc="Retrying"):
+            # Try first sample with this URL
+            idx, sample = samples[0]
+
+            if self.process_dataset_sample(sample, idx, split, num_frames, use_box):
+                successful_urls.add(url)
+                # Process all other samples with this URL
+                for other_idx, other_sample in samples[1:]:
+                    self.process_dataset_sample(other_sample, other_idx, split, num_frames, use_box)
+            else:
+                still_failed_urls.add(url)
+
+        # Restore the ones that still failed
+        self.failed_videos = still_failed_urls
+        self.save_failed_videos()
+
+        print(f"\nRetry Results:")
+        print(f"  ✓ Successfully recovered: {len(successful_urls)}")
+        print(f"  ✗ Still failed: {len(still_failed_urls)}")
+        print(f"  Success rate: {len(successful_urls) / len(url_to_samples) * 100:.1f}%")
+
+        return {
+            'successful': len(successful_urls),
+            'failed': len(still_failed_urls),
+            'total': len(url_to_samples)
+        }
+    def download_video(self, url, output_path, cookiefile=None,
+                       use_browser_cookies=False,  # Changed to False by default
+                       max_retries=3, initial_backoff=5,
                        max_backoff=300):
         """
         Download with retries/backoff and optional cookie auth.
@@ -115,7 +186,6 @@ class MSASLDataLoader:
         attempt = 0
         backoff = initial_backoff
 
-        # prepare opts
         ydl_opts = {
             'format': 'best[ext=mp4]',
             'outtmpl': output_path,
@@ -125,10 +195,15 @@ class MSASLDataLoader:
             'retries': 1,
         }
 
-        if use_browser_cookies:
-            ydl_opts['cookiesfrombrowser'] = ('opera',)
-        elif cookiefile and os.path.exists(cookiefile):
+        # Use manual cookie file if provided
+        if cookiefile and os.path.exists(cookiefile):
             ydl_opts['cookiefile'] = cookiefile
+        elif use_browser_cookies:
+            # Only try browser cookies if explicitly enabled and no cookiefile
+            try:
+                ydl_opts['cookiesfrombrowser'] = ('opera',)
+            except:
+                pass
 
         while attempt < max_retries:
             try:
@@ -140,28 +215,38 @@ class MSASLDataLoader:
                 msg = str(e).lower()
                 attempt += 1
 
-                # private or deleted errors
+                # Bot detection
+                if 'sign in' in msg and 'bot' in msg and 'cookies' in msg:
+                    return (False, True, False)  # temp for bot failures
+
+                # Permanent failures
                 if any(keyword in msg for keyword in ['private', 'unavailable', 'removed', 'deleted']):
-                    # rate-limit check
+                    # Check if rate-limit related
                     if 'rate-limit' in msg or "isn't available" in msg or 'try again later' in msg:
                         return (False, True, False)  # rate-limited (temporary)
                     else:
                         return (False, False, True)  # permanent failure
 
-                # youtube rate limits you
-                if 'rate-limit' in msg or 'too many requests' in msg or 'exceeded' in msg:
-                    return (False, True, False)  # rate-limited (temporary) (not successful, video exists, rate limited)
+                # Rate-limited
+                if 'rate-limit' in msg or 'too many requests' in msg or 'exceeded' in msg or 'not a bot' in msg:
+                    return (False, True, False)  # rate-limited (temporary)
 
-                # network error
+                # Network error - retry
                 time.sleep(min(5 * attempt, 60))
                 continue
 
             except Exception as e:
+                msg = str(e).lower()
                 attempt += 1
+
+                # Check for bot detection in other exceptions
+                if 'bot' in msg:
+                    return (False, True, False)
+
                 time.sleep(min(5 * attempt, 60))
                 continue
 
-        # max retries, assume a temp failure
+        # Max retries, assume temp failure
         return (False, True, False)
 
     def extract_clip(self, video_path, start_time, end_time, output_path):
@@ -314,7 +399,7 @@ class MSASLDataLoader:
             full_video_path = self.video_cache[url]
         else:
             # download attempt
-            success, is_rate_limited, is_permanent = self.download_video(url, full_video_path)
+            success, is_rate_limited, is_permanent = self.download_video(url, full_video_path, cookiefile=self.cookie_file)
 
             if success:
                 # add video to video cache
@@ -470,3 +555,5 @@ if __name__ == "__main__":
         delete_clips_after=False,  # Set True to save disk space
         # limit_per_split=1000, # Remove this to process full dataset (defaults to NoneType)
     )
+    train_data, _, _, _ = loader.load_json_files()
+    loader.retry_failures(train_data, split='train')

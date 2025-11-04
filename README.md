@@ -1,6 +1,8 @@
 # MS-ASL Dataset Integration Guide
 
 This guide explains how to use my sign language recognition system with the MS-ASL dataset.
+
+UPDATED MODEL USES DIFFERENT DATA SET, SCROLL TO THAT IF USING UPDATED VERSIOn
 ## Download from this link:
 https://www.microsoft.com/en-us/download/details.aspx?id=100121
 ## Dataset Structure
