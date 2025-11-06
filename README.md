@@ -11,7 +11,7 @@ testing and validation data pieces
  - Gross: Classification of sign
  - Participant ID: ID of the person signing
  - Video file: Name of the file in videos folder that matches to that data
- - ASL-VEX: ASL-VEX encoding of the file number
+ - ASL-VEX Code: ASL-VEX encoding of the file number
 
 # MS-ASL Dataset Integration Guide
 
