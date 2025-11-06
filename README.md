@@ -1,8 +1,23 @@
+# ASL Citizen Integration Guide
+
+## Files
+- **test.csv**: CSV File of 32,941 test samples
+- **train.csv**: CSV File of 40,154 training samples
+- **val.csv**: CSV File of 10,304 validation samples
+- **videos Folder**: folder containing all videos in the training 
+testing and validation data pieces
+
+## Columns for CSV
+ - Gross: Classification of sign
+ - Participant ID: ID of the person signing
+ - Video file: Name of the file in videos folder that matches to that data
+ - ASL-VEX: ASL-VEX encoding of the file number
+
 # MS-ASL Dataset Integration Guide
 
 This guide explains how to use my sign language recognition system with the MS-ASL dataset.
 
-UPDATED MODEL USES DIFFERENT DATA SET, SCROLL TO THAT IF USING UPDATED VERSIOn
+UPDATED MODEL USES DIFFERENT DATA SET, SCROLL TO THAT IF USING UPDATED VERSION
 ## Download from this link:
 https://www.microsoft.com/en-us/download/details.aspx?id=100121
 ## Dataset Structure
