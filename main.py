@@ -193,8 +193,8 @@ def run_msasl_inference(model_path='msasl_model.h5',
 if __name__ == "__main__":
     # run for trained model
     run_msasl_inference(
-        model_path='msasl_model.h5',
-        classes_path='msasl_classes.json',
+        model_path='asl_citizen_model.h5',
+        classes_path='asl_citizen_glosses.json',
         threshold=0.7,
         sequence_length=30
     )
