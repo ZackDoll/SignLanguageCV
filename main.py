@@ -102,8 +102,23 @@ def run_msasl_inference(model_path='msasl_model.h5',
     model = load_model(model_path)
     print("Loading classes...")
     with open(classes_path, 'r') as f:
-        actions = json.load(f)
+        actions_raw = json.load(f)
 
+    # Determine the format and create index -> name mapping
+    actions = {}
+    sample_key = list(actions_raw.keys())[0]
+
+    if sample_key.isdigit():  # ✅ CHECK if it's a digit string FIRST
+        # Keys are string numbers: {"0": "HELLO"} -> {0: "HELLO"}
+        actions = {int(k): v for k, v in actions_raw.items()}
+        print("Converted string number keys to integers")
+    else:
+        # Keys are sign names: {"HELLO": 0} -> {0: "HELLO"} (reverse)
+        actions = {v: k for k, v in actions_raw.items()}  # ✅ REVERSE the mapping
+        print("Reversed mapping: sign names to indices")
+
+    print(f"Model loaded with {len(actions)} classes")
+    print(f"Sample mappings: {dict(list(actions.items())[:3])}")
     print(f"Model loaded with {len(actions)} classes")
 
     sequence = []
@@ -148,7 +163,18 @@ def run_msasl_inference(model_path='msasl_model.h5',
                 predicted_class = np.argmax(res)
                 confidence = res[predicted_class]
 
-                print(f"Prediction: {actions[str(predicted_class)]} "
+                # If keys are strings like "HELLO", converts to reverse mapping
+                if isinstance(list(actions.keys())[0], str):
+                    actions = {int(k): v for k, v in actions.items()}  # Try to convert
+                    # OR creates reverse mapping if needed
+
+                # Try int key first, then string key
+                if predicted_class in actions:
+                    action_name = actions[predicted_class]
+                elif str(predicted_class) in actions:
+                    action_name = actions[str(predicted_class)]
+
+                print(f"Prediction: {action_name} "
                       f"(confidence: {confidence:.2f})")
 
                 predictions.append(predicted_class)
@@ -160,9 +186,18 @@ def run_msasl_inference(model_path='msasl_model.h5',
                                                return_counts=True)
 
                     if counts.max() >= 7 and confidence > threshold:
-                        predicted_action = actions[str(unique[np.argmax(counts)])]
+                        # Get the most common prediction
+                        most_common_class = unique[np.argmax(counts)]
 
-                        #add to sentence if new
+                        # Get action name - handle both int and string keys
+                        if most_common_class in actions:
+                            predicted_action = actions[most_common_class]
+                        elif str(most_common_class) in actions:
+                            predicted_action = actions[str(most_common_class)]
+                        else:
+                            predicted_action = f"Class {most_common_class}"
+
+                        # add to sentence if new
                         if len(sentence) == 0 or predicted_action != sentence[-1]:
                             sentence.append(predicted_action)
 
