@@ -167,10 +167,10 @@ Apply transformations to increase effective dataset size:
 
 | Dataset Configuration | Classes | Samples/Class | Expected Accuracy |
 |----------------------|---------|---------------|-------------------|
-| ASL Citizen (Top 50) | 50 | ~35 | 35-45% |
-| ASL Citizen (Top 100) | 100 | ~18 | 25-35% |
+| ASL Citizen (Top 500) | 500 | ~35 | 60-65% |
+| ASL Citizen (Top 1000) | 1000 | ~18 | 40-45% |
 | Combined (ASL + Google) | ~300 | ~45 | 40-55% |
-| Full ASL Citizen | 2,731 | ~15 | 8-15% |
+| Full ASL Citizen | 2,731 | ~15 | 15-25% |
 
 **Note**: Top-5 accuracy is typically 2-3x higher than top-1 accuracy.
 
