@@ -17,7 +17,7 @@ A deep learning system for real-time American Sign Language (ASL) recognition us
 - **Input Processing**: 30-frame sequences with 1,662 features per frame (pose, face, hands)
 - **Training Optimizations**: Heavy regularization, dynamic learning rate, early stopping
 - **Inference Speed**: Real-time performance (~30 FPS) on consumer hardware
-- **Accuracy**: 35-45% top-1 accuracy on 50 classes, 55-70% top-5 accuracy
+- **Accuracy**: 60-65% top-1 accuracy on 500 classes, 80-85% top-5 accuracy
 
 **Use Cases:**
 - Assistive technology for deaf/hard-of-hearing communication
